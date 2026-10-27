@@ -1,0 +1,365 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>高画質・7枚ランダム・無限ループ</title>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .loop-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .loop-track {
+      display: flex;
+      width: max-content;
+      height: 100vh;
+      transform: translate3d(0, 0, 0);
+      will-change: transform;
+      backface-visibility: hidden;
+    }
+
+    .loop-img {
+      display: block;
+      height: 100vh;
+      width: auto;
+      max-width: none;
+      flex: 0 0 auto;
+      object-fit: contain;
+      image-rendering: -webkit-optimize-contrast;
+      backface-visibility: hidden;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="loop-container">
+    <div class="loop-track" id="loopTrack"></div>
+  </div>
+
+  <script>
+    // =====================================
+    // 設定：元の設定を維持
+    // =====================================
+
+    const images = [
+      'from-PixAI-2071592890281935906-Photoroom.png',
+      'from-PixAI-2071592124433560502-Photoroom.png',
+      'from-PixAI-2071592173372026078-Photoroom.png',
+      'from-PixAI-2071592196236975333-Photoroom.png',
+      'from-PixAI-2071592223945063660-Photoroom.png',
+      'from-PixAI-2071592254133334454-Photoroom.png',
+      'from-PixAI-2071592746548458951-Photoroom.png'
+    ];
+
+    // 7枚分の移動時間（秒）
+    // 小さくすると速く、大きくすると遅くなる
+    const LOOP_DURATION = 50;
+
+    // 同じ画像の再登場を禁止する間隔
+    const MIN_GAP = 3;
+
+    // トラック内に最低限維持する画像数
+    // 7枚単位で補充する
+    const MIN_BUFFER = 21;
+
+    const container = document.querySelector('.loop-container');
+    const track = document.getElementById('loopTrack');
+
+    // =====================================
+    // 状態管理
+    // =====================================
+
+    // 直前に生成したループ
+    let previousSet = null;
+
+    // 次に生成するループの番号
+    let nextSetId = 0;
+
+    // トラック左端からの移動距離
+    let offset = 0;
+
+    // 1秒あたりの移動ピクセル数
+    let speed = 0;
+
+    let lastTimestamp = null;
+    let running = false;
+
+    // 画像の読み込み情報
+    const imageInfo = new Map();
+
+    // =====================================
+    // ランダムシャッフル
+    // =====================================
+
+    function shuffle(array) {
+      const result = [...array];
+
+      for (let i = result.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+
+        [result[i], result[j]] =
+          [result[j], result[i]];
+      }
+
+      return result;
+    }
+
+    // =====================================
+    // 次の7枚を生成
+    //
+    // 1ループにつき7枚を1回ずつ使用。
+    // 直前3枚と同じ画像を次の3枚に出さない。
+    // =====================================
+
+    function createNextSet() {
+      let nextSet;
+
+      if (previousSet === null) {
+        // 最初のループはランダム
+        nextSet = shuffle(images);
+      } else {
+        // 前のループの最後3枚
+        const previousLastThree =
+          previousSet.slice(-MIN_GAP);
+
+        // 直前3枚に含まれる画像を候補から除外
+        const candidates = images.filter(
+          src => !previousLastThree.includes(src)
+        );
+
+        // 次のループの最初3枚をランダムに選ぶ
+        const firstThree = shuffle(candidates)
+          .slice(0, MIN_GAP);
+
+        // 残り4枚をランダムに並べる
+        const remaining = shuffle(
+          images.filter(src => !firstThree.includes(src))
+        );
+
+        nextSet = [...firstThree, ...remaining];
+      }
+
+      // 次のループ生成時に使用する
+      previousSet = nextSet;
+
+      return {
+        id: nextSetId++,
+        images: nextSet
+      };
+    }
+
+    // =====================================
+    // 画像をトラックに追加
+    // 画像は事前読み込み済み
+    // =====================================
+
+    function appendNextSet() {
+      const set = createNextSet();
+      const fragment = document.createDocumentFragment();
+
+      set.images.forEach(src => {
+        const img = document.createElement('img');
+
+        img.src = src;
+        img.alt = '高画質全画面画像';
+        img.className = 'loop-img';
+        img.draggable = false;
+
+        // どの7枚ループに属するか記録
+        img.dataset.setId = String(set.id);
+
+        fragment.appendChild(img);
+      });
+
+      track.appendChild(fragment);
+    }
+
+    // =====================================
+    // 7枚分の幅を計算
+    //
+    // すべてのループで同じ7画像を1回ずつ
+    // 使用するため、合計幅は同じになる。
+    // =====================================
+
+    function calculateLoopWidth() {
+      const height = container.clientHeight;
+
+      return images.reduce((total, src) => {
+        const info = imageInfo.get(src);
+
+        return total +
+          (info.width / info.height) * height;
+      }, 0);
+    }
+
+    function updateSpeed() {
+      const loopWidth = calculateLoopWidth();
+
+      // 7枚分を90秒で移動
+      speed = loopWidth / LOOP_DURATION;
+    }
+
+    // =====================================
+    // 表示済み画像を取り除く
+    //
+    // 削除した画像の幅だけoffsetも減らす。
+    // これにより画面上の画像位置は変わらない。
+    // =====================================
+
+    function removePassedImages() {
+      while (track.firstElementChild) {
+        const first = track.firstElementChild;
+        const width = first.getBoundingClientRect().width;
+
+        // 最初の画像がまだ画面内にある
+        if (offset < width) {
+          break;
+        }
+
+        // 表示領域を完全に通過した画像だけ削除
+        offset -= width;
+        first.remove();
+      }
+    }
+
+    // =====================================
+    // 画像列を先読みして補充
+    //
+    // 既存の画像を並べ替えず、末尾に追加する。
+    // 固定周期は設けない。
+    // =====================================
+
+    function maintainBuffer() {
+      while (track.children.length < MIN_BUFFER) {
+        appendNextSet();
+      }
+    }
+
+    // =====================================
+    // 滑らかな移動
+    //
+    // CSSアニメーションを再起動せず、
+    // requestAnimationFrameで位置を更新。
+    // =====================================
+
+    function animate(timestamp) {
+      if (!running) return;
+
+      if (lastTimestamp === null) {
+        lastTimestamp = timestamp;
+      }
+
+      let delta = (timestamp - lastTimestamp) / 1000;
+      lastTimestamp = timestamp;
+
+      // タブ復帰などで大きく飛ぶのを抑える
+      delta = Math.min(delta, 0.05);
+
+      offset += speed * delta;
+
+      // 通過済み画像を削除して位置を補正
+      removePassedImages();
+
+      // 必要な画像を7枚単位で補充
+      maintainBuffer();
+
+      // アニメーション位置を連続的に更新
+      track.style.transform =
+        `translate3d(${-offset}px, 0, 0)`;
+
+      requestAnimationFrame(animate);
+    }
+
+    // =====================================
+    // 初期化
+    // =====================================
+
+    function preloadImage(src) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+
+        img.onload = () => {
+          if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+            reject(new Error('画像サイズを取得できません: ' + src));
+            return;
+          }
+
+          imageInfo.set(src, {
+            width: img.naturalWidth,
+            height: img.naturalHeight
+          });
+
+          resolve();
+        };
+
+        img.onerror = () => {
+          reject(new Error('画像を読み込めません: ' + src));
+        };
+
+        img.src = src;
+
+        if (img.complete && img.naturalWidth > 0) {
+          imageInfo.set(src, {
+            width: img.naturalWidth,
+            height: img.naturalHeight
+          });
+
+          resolve();
+        }
+      });
+    }
+
+    async function initLoop() {
+      try {
+        // 7枚すべてを事前に読み込む
+        await Promise.all(images.map(preloadImage));
+
+        // 初期表示前に4ループ分を用意
+        // これは固定周期ではなく、先読み用のバッファ
+        for (let i = 0; i < 4; i++) {
+          appendNextSet();
+        }
+
+        updateSpeed();
+
+        // 画像を配置した状態で位置を確定
+        track.style.transform = 'translate3d(0, 0, 0)';
+        track.getBoundingClientRect();
+
+        running = true;
+        requestAnimationFrame(animate);
+
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    // 画面サイズ変更時は速度を再計算
+    // 表示位置はリセットしない
+    window.addEventListener('resize', () => {
+      if (imageInfo.size === images.length) {
+        updateSpeed();
+      }
+    });
+
+    initLoop();
+  </script>
+</body>
+</html>
